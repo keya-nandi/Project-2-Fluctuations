@@ -1,0 +1,580 @@
+---
+title: "Project 2"
+author: "Keya Nandi"
+date: "2025-10-31"
+output: html_document
+---
+
+# **Clean and load the packages**
+```{r}
+rm(list=ls())
+library(dplyr)
+library(tidyr)
+library(mFilter)
+library(ggplot2)
+library(zoo)
+```
+
+
+# **PART 1**
+### Load all the data 
+```{r}
+setwd("D:/MS Econ/Macroeconomics")
+
+# GDP per capita
+gdp <- read.csv("D:/MS Econ/Macroeconomics/GDP per capita.csv")
+
+# unemployment rate
+unemployment <- read.csv("D:/MS Econ/Macroeconomics/Unemployment rate quarterly.csv")
+
+# interest rate (short term)
+interestrate <- read.csv("D:/MS Econ/Macroeconomics/Short term interest rate.csv")
+
+# cpi inflation rate
+inflation <- read.csv("D:/MS Econ/Macroeconomics/CPI inflation rate.csv")
+```
+
+
+### Mutated tables and cleaned datasets
+```{r}
+#clean gdp
+# Inspect what the base column looks like
+gdp <- gdp %>%
+  filter(REF_YEAR_PRICE == "2020")
+
+# Filter and clean GDP data
+gdp <- gdp %>%
+  filter(Reference.area %in% c("United States", "Australia", "Germany") &
+         as.numeric(substr(TIME_PERIOD, 1, 4)) >= 2010 &
+         as.numeric(substr(TIME_PERIOD, 1, 4)) <= 2023) %>%
+  rename(Country = Reference.area, Time = TIME_PERIOD, GDP = OBS_VALUE) %>%
+  select(Country, Time, GDP)
+
+
+# Filter Unemployment data
+unemployment <- unemployment %>%
+  filter(Reference.area %in% c("United States", "Australia", "Germany") &
+         as.numeric(substr(TIME_PERIOD, 1, 4)) >= 2010 &
+         as.numeric(substr(TIME_PERIOD, 1, 4)) <= 2023) %>%
+  rename(Country = Reference.area, Time = TIME_PERIOD, Unemployment = OBS_VALUE) %>%
+  select(Country, Time, Unemployment)
+
+# Filter Interest Rate data
+interestrate <- interestrate %>%
+  filter(Reference.area %in% c("United States", "Australia", "Germany") &
+         as.numeric(substr(TIME_PERIOD, 1, 4)) >= 2010 &
+         as.numeric(substr(TIME_PERIOD, 1, 4)) <= 2023) %>%
+  rename(Country = Reference.area, Time = TIME_PERIOD, Interestrate = OBS_VALUE) %>%
+  select(Country, Time, Interestrate)
+
+# Filter Inflation data
+inflation <- inflation %>%
+  filter(Reference.area %in% c("United States", "Australia", "Germany") &
+         as.numeric(substr(TIME_PERIOD, 1, 4)) >= 2010 &
+         as.numeric(substr(TIME_PERIOD, 1, 4)) <= 2023) %>%
+  rename(Country = Reference.area, Time = TIME_PERIOD, Inflation = OBS_VALUE) %>%
+  select(Country, Time, Inflation)
+
+
+```
+
+
+### Combine datasets into one panel
+```{r}
+combined <- gdp %>%
+  left_join(unemployment, by = c("Country", "Time")) %>%
+  left_join(interestrate, by = c("Country", "Time")) %>%
+  left_join(inflation, by = c("Country", "Time"))
+
+colSums(is.na(combined))
+
+```
+
+
+
+
+### Detrending with HP filter
+```{r}
+
+# Apply HP filter by country for each variable
+hp_results <- combined %>%
+  group_by(Country) %>%
+  mutate(
+    GDP_cycle = hpfilter(GDP, freq = 1600)$cycle,
+    Unemployment_cycle = hpfilter(Unemployment, freq = 1600)$cycle,
+    Interestrate_cycle = hpfilter(Interestrate, freq = 1600)$cycle,
+    Inflation_cycle = hpfilter(Inflation, freq = 1600)$cycle
+  )
+
+```
+
+### Volatility measures
+```{r}
+volatility <- hp_results %>%
+  group_by(Country) %>%
+  summarise(
+    GDP_vol = sd(GDP_cycle, na.rm = TRUE),
+    Unemployment_vol = sd(Unemployment_cycle, na.rm = TRUE),
+    Interest_vol = sd(Interestrate_cycle, na.rm = TRUE),
+    Inflation_vol = sd(Inflation_cycle, na.rm = TRUE)
+  )
+
+volatility
+
+
+```
+
+### Correlation with GDP
+```{r}
+correlations <- hp_results %>%
+  group_by(Country) %>%
+  summarise(
+    Corr_Unemployment = cor(GDP_cycle, Unemployment_cycle, use = "complete.obs"),
+    Corr_Interest = cor(GDP_cycle, Interestrate_cycle, use = "complete.obs"),
+    Corr_Inflation = cor(GDP_cycle, Inflation_cycle, use = "complete.obs")
+  )
+
+correlations
+
+
+```
+
+### Visualize
+```{r}
+library(zoo)  # for yearqtr
+
+hp_results <- hp_results %>%
+  mutate(Time = as.yearqtr(Time, format = "%Y-Q%q"))
+
+
+library(ggplot2)
+
+ggplot(hp_results, aes(x = Time, y = GDP_cycle, color = Country, group = Country)) +
+  geom_line(size = 1) +
+  labs(
+    title = "Cyclical Component of Real GDP (HP Filtered)",
+    x = "Year",
+    y = "GDP Cycle"
+  ) +
+  scale_x_yearqtr(format = "%Y", n = 7) +  # show one tick roughly every year
+  theme_minimal(base_size = 13) +
+  theme(
+    legend.position = "top",
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+
+```
+
+### plotting multiple cycles 
+```{r}
+hp_long <- hp_results %>%
+  select(Country, Time, GDP_cycle, Unemployment_cycle, Interestrate_cycle, Inflation_cycle) %>%
+  pivot_longer(
+    cols = ends_with("_cycle"),
+    names_to = "Variable",
+    values_to = "Cycle"
+  )
+
+ggplot(hp_long, aes(x = Time, y = Cycle, color = Country)) +
+  geom_line(size = 1) +
+  facet_wrap(~ Variable, scales = "free_y", ncol = 2) +
+  scale_x_yearqtr(format = "%Y", n = 7) +
+  labs(title = "Business Cycle Fluctuations (HP Filtered)", x = "Year", y = "Cyclical Component") +
+  theme_minimal(base_size = 13) +
+  theme(
+    legend.position = "top",
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+```
+
+# **Part B**
+### Load all the data 
+```{r}
+rm(list=ls())
+setwd("D:/MS Econ/Macroeconomics")
+
+# GDP per capita
+gdp_usa <- read.csv("D:/MS Econ/Macroeconomics/GDP per capita.csv")
+
+# unemployment rate
+unemployment_usa <- read.csv("D:/MS Econ/Macroeconomics/Unemployment rate quarterly.csv")
+
+# interest rate (short term)
+interestrate_usa <- read.csv("D:/MS Econ/Macroeconomics/Short term interest rate.csv")
+
+# cpi inflation rate
+inflation_usa <- read.csv("D:/MS Econ/Macroeconomics/CPI inflation rate.csv")
+
+
+```
+
+
+### Mutated tables and cleaned datasets
+```{r}
+#clean gdp
+# Inspect what the base column looks like
+gdp_usa <- gdp_usa %>%
+  filter(REF_YEAR_PRICE == "2020")
+
+# Filter and clean GDP data
+gdp_usa <- gdp_usa %>%
+  filter(Reference.area %in% c("United States") &
+         as.numeric(substr(TIME_PERIOD, 1, 4)) >= 1980 &
+         as.numeric(substr(TIME_PERIOD, 1, 4)) <= 2023) %>%
+  rename(Country = Reference.area, Time = TIME_PERIOD, GDP = OBS_VALUE) %>%
+  select(Country, Time, GDP)
+
+
+# Filter Unemployment data
+unemployment_usa <- unemployment_usa %>%
+  filter(Reference.area %in% c("United States") &
+         as.numeric(substr(TIME_PERIOD, 1, 4)) >= 1980 &
+         as.numeric(substr(TIME_PERIOD, 1, 4)) <= 2023) %>%
+  rename(Country = Reference.area, Time = TIME_PERIOD, Unemployment = OBS_VALUE) %>%
+  select(Country, Time, Unemployment)
+
+# Filter Interest Rate data
+interestrate_usa <- interestrate_usa %>%
+  filter(Reference.area %in% c("United States") &
+         as.numeric(substr(TIME_PERIOD, 1, 4)) >= 1980 &
+         as.numeric(substr(TIME_PERIOD, 1, 4)) <= 2023) %>%
+  rename(Country = Reference.area, Time = TIME_PERIOD, Interestrate = OBS_VALUE) %>%
+  select(Country, Time, Interestrate)
+
+# Filter Inflation data
+inflation_usa <- inflation_usa %>%
+  filter(Reference.area %in% c("United States") &
+         as.numeric(substr(TIME_PERIOD, 1, 4)) >= 1980 &
+         as.numeric(substr(TIME_PERIOD, 1, 4)) <= 2023) %>%
+  rename(Country = Reference.area, Time = TIME_PERIOD, Inflation = OBS_VALUE) %>%
+  select(Country, Time, Inflation)
+
+
+```
+
+### Combine datasets into one panel
+```{r}
+library(dplyr)
+
+combined_usa <- gdp_usa %>%
+  left_join(unemployment_usa, by = c("Country", "Time")) %>%
+  left_join(interestrate_usa, by = c("Country", "Time")) %>%
+  left_join(inflation_usa, by = c("Country", "Time"))
+
+colSums(is.na(combined_usa))
+
+```
+
+### Ensure numeric columns
+```{r}
+combined_usa <- combined_usa %>%
+  mutate(YearQ = as.yearqtr(Time, format = "%Y-Q%q"))
+
+# ensure numeric columns
+combined_usa <- combined_usa %>%
+  mutate(
+    GDP = as.numeric(GDP),
+    Unemployment = as.numeric(Unemployment),
+    Interestrate = as.numeric(Interestrate),
+    Inflation = as.numeric(Inflation)
+  ) %>%
+  arrange(YearQ)
+
+colSums(is.na(combined_usa))
+```
+
+
+
+
+### Detrend
+```{r}
+
+# Apply HP filter for GDP
+combined_usa <- combined_usa %>%
+  mutate(
+    GDP_cycle = hpfilter(GDP, freq = 1600)$cycle,       # quarterly frequency
+    Unemployment_cycle = hpfilter(Unemployment, freq = 1600)$cycle,
+    Interestrate_cycle = hpfilter(Interestrate, freq = 1600)$cycle,
+    Inflation_cycle = hpfilter(Inflation, freq = 1600)$cycle
+  )
+```
+
+
+### Define crisis window
+```{r}
+
+gfc_start <- as.yearqtr("2007 Q4")
+gfc_end   <- as.yearqtr("2009 Q2")
+
+covid_start <- as.yearqtr("2020 Q1")
+covid_end   <- as.yearqtr("2021 Q2")
+
+```
+
+### Compute peak-to-trough declines and recovery
+```{r}
+# Subset GFC period
+gfc_data <- combined_usa %>% filter(YearQ >= gfc_start & YearQ <= gfc_end)
+
+# GDP peak and trough
+gdp_peak <- max(gfc_data$GDP)
+gdp_trough <- min(gfc_data$GDP)
+gdp_decline <- (gdp_trough - gdp_peak) / gdp_peak * 100  # % decline
+
+```
+
+### Visualize
+```{r}
+library(ggplot2)
+
+ggplot(combined_usa, aes(x = YearQ)) +
+  geom_line(aes(y = GDP_cycle, color = "GDP")) +
+  geom_line(aes(y = Unemployment_cycle, color = "Unemployment")) +
+  geom_line(aes(y = Inflation_cycle, color = "Inflation")) +
+  geom_vline(xintercept = as.numeric(gfc_start), linetype="dashed") +
+  geom_vline(xintercept = as.numeric(gfc_end), linetype="dashed") +
+  geom_vline(xintercept = as.numeric(covid_start), linetype="dashed") +
+  geom_vline(xintercept = as.numeric(covid_end), linetype="dashed") +
+  labs(title = "US Macroeconomic Cycles: GFC", y="Deviation from trend") +
+  theme_minimal()
+
+```
+
+### Correlation and co-movememnt
+```{r}
+combined_usa %>%
+  summarise(
+    Corr_GDP_Unemployment = cor(GDP_cycle, Unemployment_cycle, use = "complete.obs"),
+    Corr_GDP_Inflation    = cor(GDP_cycle, Inflation_cycle, use = "complete.obs"),
+    Corr_GDP_Interest     = cor(GDP_cycle, Interestrate_cycle, use = "complete.obs")
+  )
+
+```
+
+
+# **Part C**
+
+Load the dataset
+```{r}
+
+# 0. load
+rm(list=ls())
+compustat <- read.csv("D:/MS Econ/Macroeconomics/Compustat data.csv", stringsAsFactors = FALSE)
+
+library(dplyr)
+library(ggplot2)
+library(zoo) # for quarters
+
+
+# Keep only relevant variables and convert to numeric
+compustat <- compustat %>%
+  select(gvkey, datadate, datafqtr, sic, saleq, capxy, dlcq, dlttq, ceqq, niq, atq) %>%
+  mutate(
+    saleq = as.numeric(saleq),
+    capxy = as.numeric(capxy),
+    dlcq = as.numeric(dlcq),
+    dlttq = as.numeric(dlttq),
+    ceqq = as.numeric(ceqq),
+    niq = as.numeric(niq),
+    atq = as.numeric(atq)
+  ) %>%
+  # Remove rows where all numeric columns are NA
+  filter(!(is.na(saleq) & is.na(capxy) & is.na(dlcq) & is.na(dlttq) & is.na(ceqq) & is.na(niq) & is.na(atq))) %>%
+  # Fill remaining NAs with 0 for calculations
+  mutate(across(c(saleq, capxy, dlcq, dlttq, ceqq, niq, atq), ~ifelse(is.na(.), 0, .)))
+
+colSums(is.na(compustat))
+
+#constructing firm panel
+# Assuming your raw Compustat dataset is 'compustat'
+compustat_clean <- compustat %>%
+  arrange(gvkey, datafqtr) %>%  # make sure data is sorted by firm and time
+  group_by(gvkey) %>%
+  mutate(
+    # Revenue growth: relative to previous quarter
+    RevenueGrowth = ifelse(lag(saleq) > 0, (saleq - lag(saleq)) / lag(saleq), NA),
+    
+    # Investment ratio: capital expenditure relative to previous quarter's total assets
+    InvestmentRatio = ifelse(lag(atq) > 0, capxy / lag(atq), NA),
+    
+    # Leverage: total debt / equity (if equity > 0)
+    Leverage = ifelse(ceqq > 0, (dlcq + dlttq) / ceqq, NA),
+    
+    # Profitability ratios: ROA = net income / total assets, ROE = net income / equity
+    ROA = ifelse(atq > 0, niq / atq, NA),
+    ROE = ifelse(ceqq > 0, niq / ceqq, NA)
+  ) %>%
+  ungroup()
+
+colSums(is.na(compustat_clean))
+
+library(dplyr)
+
+compustat_clean <- compustat %>%
+  mutate(
+    RevenueProxy = ifelse(atq > 0, saleq / atq, NA),
+    InvestmentRatio = ifelse(atq > 0, capxy / atq, NA),
+    Leverage = ifelse(ceqq > 0, (dlcq + dlttq) / ceqq, NA),
+    ROA = ifelse(atq > 0, niq / atq, NA),
+    ROE = ifelse(ceqq > 0, niq / ceqq, NA)
+  )
+
+compustat_clean <- compustat %>%
+  filter(!is.na(atq) & atq != 0 & !is.na(ceqq) & ceqq != 0) %>%
+  mutate(
+    RevenueProxy = saleq / atq,
+    InvestmentRatio = capxy / atq,
+    Leverage = (dlcq + dlttq) / ceqq,
+    ROA = niq / atq,
+    ROE = niq / ceqq
+  )
+
+
+compustat_clean <- compustat_clean %>%
+  arrange(gvkey, datafqtr) %>%
+  mutate(
+    # Extract year and quarter
+    year = as.numeric(substr(datafqtr, 1, 4)),
+    quarter = substr(datafqtr, 6, 7)
+  )
+
+
+#define periods
+compustat_clean <- compustat_clean %>%
+  mutate(
+    Period = case_when(
+      year < 2007 ~ "Pre-GFC",        # all years before 2007
+      year >= 2007 & year <= 2009 ~ "GFC",  # 2007–2009
+      year >= 2010 ~ "Post-GFC",      # 2010 onwards
+      TRUE ~ NA_character_
+    )
+  )
+
+colSums(is.na(compustat_clean))
+
+#sector classification
+compustat_clean <- compustat_clean %>%
+  mutate(
+    sector = case_when(
+      sic >= 1 & sic < 1000 ~ "Agriculture, Forestry & Fishing",
+      sic >= 1000 & sic < 1500 ~ "Mining",
+      sic >= 1500 & sic < 1800 ~ "Construction",
+      sic >= 2000 & sic < 4000 ~ "Manufacturing",
+      sic >= 4000 & sic < 5000 ~ "Transportation & Public Utilities",
+      sic >= 5000 & sic < 5200 ~ "Wholesale Trade",
+      sic >= 5200 & sic < 6000 ~ "Retail Trade",
+      sic >= 6000 & sic < 6800 ~ "Finance, Insurance & Real Estate",
+      sic >= 7000 & sic < 9000 ~ "Services",
+      sic >= 9000 & sic < 10000 ~ "Public Administration",
+      TRUE ~ "Unknown"
+    )
+  )
+
+
+colSums(is.na(compustat_clean))
+
+#size classification
+# Compute pre-GFC average total assets per firm
+# Step 1: Calculate Pre-GFC average assets per firm
+preGFC_assets <- compustat_clean %>%
+  filter(Period == "Pre-GFC") %>%
+  group_by(gvkey) %>%
+  summarise(preGFC_assets = mean(atq, na.rm = TRUE))  # avg assets Pre-GFC
+
+
+# Step 2: Join back to main dataset
+compustat_clean <- compustat_clean %>%
+  left_join(preGFC_assets, by = "gvkey")
+
+# Step 3: Create size groups (terciles)
+compustat_clean <- compustat_clean %>%
+  mutate(
+    size_group = case_when(
+      preGFC_assets <= quantile(preGFC_assets, 1/3, na.rm = TRUE) ~ "Small",
+      preGFC_assets <= quantile(preGFC_assets, 2/3, na.rm = TRUE) ~ "Medium",
+      preGFC_assets > quantile(preGFC_assets, 2/3, na.rm = TRUE) ~ "Large",
+      TRUE ~ NA_character_
+    )
+  )
+
+
+colSums(is.na(compustat_clean))
+
+#aggregate firm metrics by period
+compustat_panel <- compustat_clean %>%
+  group_by(gvkey) %>%
+  filter(!is.na(RevenueProxy)) %>%
+  ungroup()
+
+firm_summary <- compustat_clean %>%
+  group_by(Period) %>%
+  summarise(
+    avg_revgrowth = mean(RevenueProxy, na.rm = TRUE),
+    avg_investment = mean(InvestmentRatio, na.rm = TRUE),
+    avg_leverage = mean(Leverage, na.rm = TRUE),
+    avg_roa = mean(ROA, na.rm = TRUE),
+    avg_roe = mean(ROE, na.rm = TRUE)
+  )
+
+print(firm_summary)
+
+
+```
+
+
+### Time Series plot with GFC shaded
+```{r}
+# Compute quarterly averages for time series
+ts_data <- compustat_clean %>%
+  group_by(year, quarter) %>%
+  summarise(
+    avg_revgrowth = mean(RevenueProxy, na.rm = TRUE),
+    avg_roa = mean(ROA, na.rm = TRUE)
+  ) %>%
+  mutate(YearQ = paste0(year, "-Q", quarter))
+
+ggplot(ts_data, aes(x = YearQ, y = avg_revgrowth, group = 1)) +
+  geom_line(color = "blue") +
+  geom_vline(xintercept = which(ts_data$YearQ == "2007-Q4"), linetype = "dashed", color = "red") +
+  geom_vline(xintercept = which(ts_data$YearQ == "2009-Q4"), linetype = "dashed", color = "red") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  labs(title = "Average Revenue Growth Over Time",
+       subtitle = "Red dashed lines indicate GFC period",
+       x = "Quarter", y = "Revenue Growth")
+
+
+```
+
+
+### Sectoral/size differences
+```{r}
+# By sector
+sector_summary <- compustat_clean %>%
+  group_by(Period, sector) %>%
+  summarise(avg_revgrowth = mean(RevenueProxy, na.rm = TRUE),
+            avg_roa = mean(ROA, na.rm = TRUE))
+
+# By size
+size_summary <- compustat_clean %>%
+  group_by(Period, size_group) %>%
+  summarise(avg_revgrowth = mean(RevenueProxy, na.rm = TRUE),
+            avg_roa = mean(ROA, na.rm = TRUE))
+
+
+ggplot(sector_summary, aes(x = Period, y = avg_revgrowth, fill = sector)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Revenue Growth by Sector Across GFC Periods")
+
+ggplot(size_summary, aes(x = Period, y = avg_revgrowth, fill = size_group)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Revenue Growth by Firm Size Across GFC Periods")
+
+
+```
+
+
+
+
+
